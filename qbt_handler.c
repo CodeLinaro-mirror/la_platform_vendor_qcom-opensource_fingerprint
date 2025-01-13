@@ -951,6 +951,7 @@ static int qbt_dev_register(struct qbt_drvdata *drvdata)
 	if (IS_ERR(device)) {
 		ret = PTR_ERR(device);
 		qbt_err("ipc device_create failed %d\n", ret);
+		device_destroy(drvdata->qbt_class, drvdata->qbt_fd_cdev.dev);
 		goto err_dev_create;
 	} else {
 		qbt_info("ipc device_create succeeded");
@@ -981,7 +982,8 @@ end:
 static void qbt_dev_unregister(struct qbt_drvdata *drvdata)
 {
 	qbt_debug("Entry\n");
-
+	device_destroy(drvdata->qbt_class, drvdata->qbt_fd_cdev.dev);
+	device_destroy(drvdata->qbt_class, drvdata->qbt_ipc_cdev.dev);
 	class_destroy(drvdata->qbt_class);
 	qbt_info("qbt_class destroyed\n");
 
@@ -1463,15 +1465,7 @@ static void qbt_remove(struct platform_device *pdev)
 	mutex_destroy(&drvdata->mutex);
 	mutex_destroy(&drvdata->fd_events_mutex);
 	mutex_destroy(&drvdata->ipc_events_mutex);
-
-	device_destroy(drvdata->qbt_class, drvdata->qbt_fd_cdev.dev);
-	device_destroy(drvdata->qbt_class, drvdata->qbt_ipc_cdev.dev);
-
-	class_destroy(drvdata->qbt_class);
-	cdev_del(&drvdata->qbt_fd_cdev);
-	cdev_del(&drvdata->qbt_ipc_cdev);
-	unregister_chrdev_region(drvdata->qbt_fd_cdev.dev, 1);
-	unregister_chrdev_region(drvdata->qbt_ipc_cdev.dev, 1);
+	qbt_dev_unregister(drvdata);
 
 	device_init_wakeup(&pdev->dev, 0);
 	input_unregister_handler(&qbt_touch_handler);
@@ -1488,15 +1482,7 @@ static int qbt_remove(struct platform_device *pdev)
 	mutex_destroy(&drvdata->mutex);
 	mutex_destroy(&drvdata->fd_events_mutex);
 	mutex_destroy(&drvdata->ipc_events_mutex);
-
-	device_destroy(drvdata->qbt_class, drvdata->qbt_fd_cdev.dev);
-	device_destroy(drvdata->qbt_class, drvdata->qbt_ipc_cdev.dev);
-
-	class_destroy(drvdata->qbt_class);
-	cdev_del(&drvdata->qbt_fd_cdev);
-	cdev_del(&drvdata->qbt_ipc_cdev);
-	unregister_chrdev_region(drvdata->qbt_fd_cdev.dev, 1);
-	unregister_chrdev_region(drvdata->qbt_ipc_cdev.dev, 1);
+	qbt_dev_unregister(drvdata);
 
 	device_init_wakeup(&pdev->dev, 0);
 	input_unregister_handler(&qbt_touch_handler);
