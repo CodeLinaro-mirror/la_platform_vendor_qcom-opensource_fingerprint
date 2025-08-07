@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt) "qbt:%s: " fmt, __func__
@@ -31,6 +31,7 @@
 #include <linux/input.h>
 #include "qbt_handler.h"
 #include <linux/version.h>
+#include <linux/pm_wakeup.h>
 #define QBT_DEV							     "qbt"
 #define MAX_FW_EVENTS						       128
 #define MT_MAX_FINGERS						        10
@@ -44,6 +45,7 @@
 #define FD_GPIO_ACTIVE_LOW					         0 //FIXME:Need to get this
 									   //flag value from
 									   // devicetree
+#define QBT_WAKELOCK_TIMEOUT_MS                                       5000
 
 #define qbt_debug(fmt, ...)		     pr_debug(fmt, ## __VA_ARGS__)
 #define qbt_info(fmt, ...)		      pr_info(fmt, ## __VA_ARGS__)
@@ -128,6 +130,21 @@ struct qbt_drvdata {
 	DECLARE_KFIFO(fd_events, struct fd_event, MAX_FW_EVENTS);
 	DECLARE_KFIFO(ipc_events, struct ipc_event, MAX_FW_EVENTS);
 };
+
+// Function to acquire the wakelock
+static void qbt_acquire_wakelock(struct qbt_drvdata *drvdata, unsigned int timeout_ms)
+{
+	qbt_info("Acquiring wakelock with timeout %u ms\n", timeout_ms);
+	pm_wakeup_event(drvdata->dev, timeout_ms);
+	atomic_set(&drvdata->wakelock_acquired, 1);
+}
+
+static void qbt_release_wakelock(struct qbt_drvdata *drvdata)
+{
+	qbt_info("Releasing wakelock\n");
+	pm_relax(drvdata->dev);
+	atomic_set(&drvdata->wakelock_acquired, 0);
+}
 
 static void qbt_fd_report_event(struct qbt_drvdata *drvdata, struct fd_event *event)
 {
@@ -247,7 +264,7 @@ static void qbt_touch_report_event(struct input_handle *handle,
 						MT_MAX_FINGERS * sizeof(struct touch_event));
 		} else {
 			qbt_debug("Received touch event scheduling\n");
-			pm_stay_awake(drvdata->dev);
+			qbt_acquire_wakelock(drvdata, QBT_WAKELOCK_TIMEOUT_MS);
 			schedule_work(&drvdata->fd_touch.work);
 		}
 	}
@@ -387,7 +404,7 @@ static void qbt_touch_work_func(struct work_struct *work)
 		if (config->touch_fd_enable)
 			qbt_fd_report_event(drvdata, &finger_event);
 	}
-	pm_relax(drvdata->dev);
+	qbt_release_wakelock(drvdata);
 	qbt_debug("Exit\n");
 }
 
@@ -473,8 +490,7 @@ static int qbt_release(struct inode *inode, struct file *file)
 	}
 	if (atomic_read(&drvdata->wakelock_acquired) != 0) {
 		qbt_info("Releasing wakelock\n");
-		pm_relax(drvdata->dev);
-		atomic_set(&drvdata->wakelock_acquired, 0);
+		qbt_release_wakelock(drvdata);
 	}
 	qbt_info("Exit: fd_available=%d\n", atomic_read(&drvdata->fd_available));
 	return 0;
@@ -599,21 +615,20 @@ static long qbt_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	}
 	case QBT_ACQUIRE_WAKELOCK:
 	{
-		if (atomic_read(&drvdata->wakelock_acquired) == 0) {
-			qbt_info("Acquiring wakelock\n");
-			pm_stay_awake(drvdata->dev);
+		struct qbt_wakelock_timeout timeout;
+
+		if (copy_from_user(&timeout, priv_arg, sizeof(timeout)) != 0) {
+			rc = -EFAULT;
+			qbt_warn("failed copy from user space %d, proceeding with timeout value %d ms\n",
+				    rc, QBT_WAKELOCK_TIMEOUT_MS);
+			timeout.timeout_ms = QBT_WAKELOCK_TIMEOUT_MS;
 		}
-		atomic_inc(&drvdata->wakelock_acquired);
+		qbt_acquire_wakelock(drvdata, timeout.timeout_ms);
 		break;
 	}
 	case QBT_RELEASE_WAKELOCK:
 	{
-		if (atomic_read(&drvdata->wakelock_acquired) == 0)
-			break;
-		if (atomic_dec_and_test(&drvdata->wakelock_acquired)) {
-			qbt_info("Releasing wakelock\n");
-			pm_relax(drvdata->dev);
-		}
+		qbt_release_wakelock(drvdata);
 		break;
 	}
 	case QBT_GET_TOUCH_FD_VERSION:
@@ -1094,7 +1109,7 @@ static void qbt_gpio_work_func(struct work_struct *work)
 			^ drvdata->fd_gpio.active_low;
 
 	qbt_gpio_report_event(drvdata, state);
-	pm_relax(drvdata->dev);
+	qbt_release_wakelock(drvdata);
 	qbt_debug("Exit\n");
 }
 
@@ -1114,7 +1129,7 @@ static irqreturn_t qbt_gpio_isr(int irq, void *dev_id)
 
 	qbt_info("FD event received at time %lu uS\n", (unsigned long)ktime_to_us(ktime_get()));
 
-	pm_stay_awake(drvdata->dev);
+	qbt_acquire_wakelock(drvdata, QBT_WAKELOCK_TIMEOUT_MS);
 	schedule_work(&drvdata->fd_gpio.work);
 
 	qbt_debug("Exit\n");
@@ -1143,7 +1158,7 @@ static void qbt_irq_report_event(struct work_struct *work)
 	}
 	mutex_unlock(&drvdata->ipc_events_mutex);
 	wake_up_interruptible(&drvdata->read_wait_queue_ipc);
-	pm_relax(drvdata->dev);
+	qbt_release_wakelock(drvdata);
 	qbt_debug("Exit\n");
 }
 
@@ -1172,7 +1187,7 @@ static irqreturn_t qbt_ipc_irq_handler(int irq, void *dev_id)
 
 	qbt_info("IPC event received at time %lu uS\n", (unsigned long)ktime_to_us(ktime_get()));
 
-	pm_stay_awake(drvdata->dev);
+	qbt_acquire_wakelock(drvdata, QBT_WAKELOCK_TIMEOUT_MS);
 	schedule_work(&drvdata->fw_ipc.work);
 
 	qbt_debug("Exit\n");
