@@ -1527,12 +1527,20 @@ static int qbt_resume(struct platform_device *pdev)
 	qbt_info("Entry\n");
 	struct qbt_drvdata *drvdata = platform_get_drvdata(pdev);
 
-	if (drvdata->is_wuhb_connected) {
+	if (drvdata->is_wuhb_connected && drvdata->fd_gpio.irq_enabled) {
+		int rc;
 		qbt_info("wuhb connected\n");
-		disable_irq_wake(drvdata->fd_gpio.irq);
+		rc = disable_irq_wake(drvdata->fd_gpio.irq);
+		if (rc < 0)
+			qbt_warn("Failed to disable IRQ wake for FD GPIO: %d\n", rc);
 	}
+	if (drvdata->fw_ipc.irq_enabled) {
+		int rc;
 
-	disable_irq_wake(drvdata->fw_ipc.irq);
+		rc = disable_irq_wake(drvdata->fw_ipc.irq);
+		if (rc < 0)
+			qbt_warn("Failed to disable IRQ wake for FW IPC: %d\n", rc);
+	}
 
 	qbt_debug("Exit\n");
 	return 0;
