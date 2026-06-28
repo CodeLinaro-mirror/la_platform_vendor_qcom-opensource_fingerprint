@@ -813,12 +813,15 @@ static ssize_t qbt_read(struct file *filp, char __user *ubuf, size_t cnt, loff_t
 		mutex_unlock(&drvdata->fd_events_mutex);
 	} else if (minor_no == MINOR_NUM_IPC) {
 		mutex_lock(&drvdata->ipc_events_mutex);
-		if (!kfifo_get(&drvdata->ipc_events, &fw_event))
+		if (!kfifo_get(&drvdata->ipc_events, &fw_event)) {
 			qbt_err("IPC events fifo: error removing item\n");
-
-		qbt_info("IPC event %d at minor no %d read at time %lu uS\n", (int)fw_event.ev,
-			minor_no, (unsigned long)ktime_to_us(ktime_get()));
-		num_bytes = copy_to_user(ubuf, &fw_event.ev, sizeof(fw_event.ev));
+			num_bytes = -EIO;
+		} else {
+			qbt_info("IPC event %d at minor no %d read at time %lu uS\n",
+				 (int)fw_event.ev, minor_no,
+				 (unsigned long)ktime_to_us(ktime_get()));
+			num_bytes = copy_to_user(ubuf, &fw_event.ev, sizeof(fw_event.ev));
+		}
 		mutex_unlock(&drvdata->ipc_events_mutex);
 	} else {
 		qbt_err("Invalid minor number\n");
