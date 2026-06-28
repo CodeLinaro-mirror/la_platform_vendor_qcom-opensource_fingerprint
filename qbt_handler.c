@@ -1513,10 +1513,17 @@ static int qbt_suspend(struct platform_device *pdev, pm_message_t state)
 	} else {
 		qbt_info("Driver currently available\n");
 
-		if (drvdata->is_wuhb_connected)
-			enable_irq_wake(drvdata->fd_gpio.irq);
+		if (drvdata->is_wuhb_connected && drvdata->fd_gpio.irq_enabled) {
+			rc = enable_irq_wake(drvdata->fd_gpio.irq);
+			if (rc < 0)
+				qbt_warn("Failed to enable IRQ wake for FD GPIO: %d\n", rc);
+		}
 
-		enable_irq_wake(drvdata->fw_ipc.irq);
+		if (drvdata->fw_ipc.irq_enabled) {
+			rc = enable_irq_wake(drvdata->fw_ipc.irq);
+			if (rc < 0)
+				qbt_warn("Failed to enable IRQ wake for FW IPC: %d\n", rc);
+		}
 	}
 
 	mutex_unlock(&drvdata->mutex);
